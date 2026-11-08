@@ -70,7 +70,13 @@ reinicie o processo para aplicar.
 ### Gerar o pacote localmente
 
 ```powershell
-# usa o node.exe da raiz do projeto (baixe o seu em nodejs.org/dist)
+./build.ps1
+```
+
+Por padrão usa o `node.exe` da raiz do projeto ou, se ele não existir, o Node.js
+instalado na máquina. Para usar um binário específico:
+
+```powershell
 ./build.ps1 -NodeExe "C:\caminho\para\node.exe"
 ```
 

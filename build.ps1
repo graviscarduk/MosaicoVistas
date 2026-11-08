@@ -26,8 +26,19 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
+if (-not [System.IO.Path]::IsPathRooted($NodeExe)) {
+    $NodeExe = Join-Path $root $NodeExe
+}
+
 if (-not (Test-Path $NodeExe)) {
-    throw "node.exe nao encontrado em '$NodeExe'. Baixe em https://nodejs.org/dist/ ou use -NodeExe."
+    $cmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $NodeExe = $cmd.Source
+        Write-Host "node.exe nao encontrado no projeto; usando o Node.js do PATH: $NodeExe"
+    }
+    else {
+        throw "node.exe nao encontrado. Baixe em https://nodejs.org/dist/ ou use -NodeExe <caminho>."
+    }
 }
 
 if (-not $Version) {
