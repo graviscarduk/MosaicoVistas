@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Empacotar e publicar
+    runs-on: windows-latest
+    env:
+      NODE_VERSION: "24.14.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Baixar runtime Node.js (node.exe)
+        shell: pwsh
+        run: |
+          $url = "https://nodejs.org/dist/v$env:NODE_VERSION/win-x64/node.exe"
+          Invoke-WebRequest -Uri $url -OutFile node.exe
+          "node.exe baixado: $((Get-Item node.exe).Length) bytes"
+
+      - name: Montar pacote portátil
+        shell: pwsh
+        run: ./build.ps1 -NodeExe node.exe -Version "${{ github.ref_name }}"
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Mosaico-Vistas-v*.zip
+          generate_release_notes: true

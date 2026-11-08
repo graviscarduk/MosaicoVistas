@@ -1,0 +1,31 @@
+Mosaico Vistas
+==============
+
+Nada e instalado no computador. Nao abre porta no firewall.
+
+
+COMO USAR
+---------
+1. Extraia o zip inteiro para uma pasta (Area de Trabalho serve).
+2. Duplo clique em "Mosaico Vistas.vbs".
+3. O navegador abre sozinho. Escolha a regiao e as cameras.
+4. Feche a aba: o servico se encerra sozinho.
+
+
+SE O VIDEO NAO APARECER
+-----------------------
+As cameras do COR so transmitem em H.265 (HEVC). Para ver:
+
+- Use o Chrome ou o Edge no Windows.
+- Instale a extensao HEVC da Microsoft Store (custa cerca de US$ 1).
+- Depois de instalar, feche e reabra o navegador.
+
+Firefox e Chrome no Linux nao decodificam H.265 e nao vao mostrar video.
+
+
+PARAR NA MAO
+------------
+Duplo clique em "Parar Mosaico.vbs".
+
+Se o Windows reclamar que o arquivo veio da internet:
+botao direito no zip -> Propriedades -> Desbloquear, antes de extrair.

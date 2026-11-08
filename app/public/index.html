@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Escolher câmeras — Mosaico COR-Rio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0f11'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%234fd18b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <b>Escolher câmeras</b>
+      <span id="center-label">Carregando…</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="clock mono" id="count">—</span>
+    <button class="btn primary" id="open-mosaic">Abrir mosaico</button>
+  </header>
+
+  <div class="selector-body">
+    <div id="map"></div>
+    <button class="map-btn" id="search-area" hidden>Buscar nesta área</button>
+
+    <aside class="side">
+      <div class="side-head">
+        <div class="search">
+          <span class="mono" style="color: var(--muted-2)">⌕</span>
+          <input id="search" type="search" placeholder="CEP, rua, bairro ou ponto" autocomplete="off" spellcheck="false">
+          <button class="btn icon" id="go" title="Ir para o endereço (Enter)">&#8594;</button>
+          <div class="search-results" id="search-results" hidden></div>
+        </div>
+
+        <div class="radius-row">
+          <span>Raio</span>
+          <input id="radius" type="range" min="0.3" max="3" step="0.1" value="1.5">
+          <span class="radius-val" id="radius-val">1,5 km</span>
+        </div>
+
+        <div class="side-tools">
+          <button class="btn" id="locate" title="Usar a localização deste computador">Minha localização</button>
+          <button class="btn" id="test">Testar</button>
+        </div>
+
+        <div class="progress" id="progress" hidden><div></div></div>
+        <div class="note" id="test-note" hidden></div>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="side-foot">
+        <div class="chips-head">
+          <span class="note" id="chips-count">Nenhuma câmera selecionada</span>
+          <button class="link-btn" id="clear">Limpar seleção</button>
+        </div>
+        <div class="selected-chips" id="chips"></div>
+        <div class="foot-row">
+          <label for="layout">Layout</label>
+          <select id="layout">
+            <option value="2x2">2 × 2 (4 câmeras)</option>
+            <option value="3x3">3 × 3 (9 câmeras)</option>
+            <option value="4x4">4 × 4 (16 câmeras)</option>
+          </select>
+          <div class="spacer"></div>
+          <button class="btn primary" id="save">Salvar e abrir</button>
+        </div>
+        <div class="note">Clique numa câmera para adicionar ou remover. Enter no campo de busca leva o mapa até o endereço. Botão direito no mapa escolhe um ponto.</div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="selector.js"></script>
+</body>
+</html>

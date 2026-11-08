@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mosaico COR-Rio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0f11'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%234fd18b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <b>Mosaico COR-Rio</b>
+      <span id="center-label">Carregando…</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="side-tools" id="layouts" style="flex: none">
+      <button class="btn" data-layout="2x2">2×2</button>
+      <button class="btn" data-layout="3x3">3×3</button>
+      <button class="btn" data-layout="4x4">4×4</button>
+    </div>
+
+    <span class="clock" id="clock">--:--:--</span>
+
+    <button class="btn icon" id="fullscreen-all" title="Tela cheia (F11 também funciona)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+    <a class="btn" href="/" id="edit">Editar câmeras</a>
+  </header>
+
+  <main class="mosaic-body">
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <script type="module" src="mosaic.js"></script>
+</body>
+</html>

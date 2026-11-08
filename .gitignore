@@ -1,0 +1,11 @@
+# Runtime baixado no build (não versionar)
+node.exe
+dist/
+*.zip
+
+# Arquivos de execução gerados em tempo de execução
+*.pid
+app/.mosaico.pid
+
+# Dependências
+node_modules/

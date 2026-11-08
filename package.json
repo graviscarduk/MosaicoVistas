@@ -1,0 +1,14 @@
+{
+  "name": "mosaico-vistas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplicativo portátil para Windows que exibe câmeras de ruas em mosaico",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node app/server.mjs",
+    "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "center": {
+    "lat": -22.916401108724266,
+    "lon": -43.202319145202644,
+    "label": "Rua Major Jacarandá, Zinco, Estácio, Rio de Janeiro, Região Sudeste, 20211-015"
+  },
+  "radiusKm": 1.5,
+  "layout": {
+    "cols": 2,
+    "rows": 2
+  },
+  "cameras": [
+    {
+      "apiId": "007881",
+      "nome": "RUA AFONSO CAVALCANTI 20 - FIXA"
+    },
+    {
+      "apiId": "007882",
+      "nome": "RUA AFONSO CAVALCANTI 20 - FIXA"
+    },
+    {
+      "apiId": "005390",
+      "nome": "AV. PRES. VARGAS, 2699 - PISTA LATERAL - FIXA"
+    },
+    {
+      "apiId": "005389",
+      "nome": "AV. PRES. VARGAS, 2699 - SENT. CENTRAL - FIXA"
+    }
+  ]
+}
