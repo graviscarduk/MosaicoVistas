@@ -1,6 +1,7 @@
 import {
   getConfig,
   getCameras,
+  getProviders,
   putConfig,
   padId,
   prettyName,
@@ -16,12 +17,14 @@ import {
 import { CameraPlayer } from './player.js';
 
 startKeepAlive();
-warnIfNoH265();
 
 const el = (id) => document.getElementById(id);
 const MAX_CAMERAS = 16;
 
 let cfg = null;
+let providers = [];
+let providerId = 'cor-rio';
+let providerMeta = null;
 let all = [];
 let byId = new Map();
 let groups = [];
@@ -40,25 +43,81 @@ let markerLayer = null;
 let testing = false;
 let cancelTest = false;
 
+/** O status e guardado por cidade: "23" da CET nao e a camera 23 do Rio. */
+const statusKey = (apiId) => `${providerId}:${apiId}`;
+
 /* ------------------------------------------------------------------ */
 /*  Inicio                                                             */
 /* ------------------------------------------------------------------ */
 
 async function boot() {
   cfg = await getConfig();
+
+  try {
+    const pj = await getProviders();
+    providers = Array.isArray(pj.providers) ? pj.providers : [];
+  } catch (err) {
+    console.warn('Lista de cidades indisponivel:', err);
+  }
+
+  providerId = cfg.provider || 'cor-rio';
+  providerMeta = providers.find((p) => p.id === providerId) || providers[0] || null;
+  if (providerMeta) providerId = providerMeta.id;
+
+  if (providerId === 'cor-rio') warnIfNoH265();
+
   center = { ...cfg.center };
   radiusKm = cfg.radiusKm;
   selected = new Set((cfg.cameras || []).map((c) => padId(c.apiId)));
 
-  el('radius').value = String(radiusKm);
+  populateProviderSelect();
+  applyProviderMeta();
   el('layout').value = `${cfg.layout.cols}x${cfg.layout.rows}`;
-  updateRadiusLabel();
   updateCenterLabel();
 
   initMap();
+  await loadCameras();
+}
 
+function populateProviderSelect() {
+  const select = el('provider');
+  select.innerHTML = '';
+  for (const p of providers) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = `${p.label} — ${p.kind === 'whep' ? 'vídeo' : 'foto'}`;
+    select.appendChild(opt);
+  }
+  select.value = providerId;
+  select.hidden = providers.length < 2;
+}
+
+function applyProviderMeta() {
+  if (!providerMeta) return;
+
+  const max = providerMeta.maxRadiusKm || 3;
+  el('radius').max = String(max);
+  if (radiusKm > max) radiusKm = max;
+  el('radius').value = String(radiusKm);
+  updateRadiusLabel();
+
+  const cc = providerMeta.countryCode || 'br';
+  el('search').placeholder = cc === 'br' ? 'CEP, rua, bairro ou ponto' : 'Rua, bairro ou ponto';
+
+  const credit = el('credit');
+  credit.textContent = providerMeta.attribution || '';
+  if (providerMeta.creditUrl) {
+    credit.href = providerMeta.creditUrl;
+    credit.target = '_blank';
+    credit.rel = 'noopener noreferrer';
+  } else {
+    credit.removeAttribute('href');
+  }
+}
+
+async function loadCameras() {
   try {
-    const raw = await getCameras();
+    const raw = await getCameras(providerId);
     all = raw
       .map((c) => ({
         apiId: padId(c.apiId),
@@ -73,17 +132,61 @@ async function boot() {
     render();
   } catch (err) {
     listEl().innerHTML =
-      '<div class="empty">Não foi possível carregar a lista de câmeras do COR.<br>Verifique a conexão e recarregue a página.</div>';
+      '<div class="empty">Não foi possível carregar a lista de câmeras desta cidade.<br>Verifique a conexão e recarregue a página.</div>';
     console.error(err);
   }
 }
+
+async function changeProvider(nextId) {
+  const next = providers.find((p) => p.id === nextId);
+  if (!next || next.id === providerId) return;
+
+  if (selected.size) {
+    const ok = confirm('Trocar de cidade limpa a seleção atual. Continuar?');
+    if (!ok) {
+      el('provider').value = providerId;
+      return;
+    }
+  }
+
+  providerId = next.id;
+  providerMeta = next;
+  selected.clear();
+  center = { ...next.defaultCenter };
+  radiusKm = next.defaultRadiusKm;
+
+  if (providerId === 'cor-rio') warnIfNoH265();
+  else document.querySelector('.codec-warn')?.remove();
+
+  applyProviderMeta();
+  setCenter(center, { moveView: true, zoom: next.defaultZoom || 14 });
+  renderChips();
+
+  await loadCameras();
+
+  try {
+    cfg = await putConfig({
+      ...cfg,
+      provider: providerId,
+      center,
+      radiusKm,
+      cameras: [],
+    });
+  } catch (err) {
+    console.warn('Nao foi possivel salvar a cidade escolhida:', err);
+  }
+}
+
 
 /* ------------------------------------------------------------------ */
 /*  Mapa                                                               */
 /* ------------------------------------------------------------------ */
 
 function initMap() {
-  map = L.map('map', { zoomControl: true }).setView([center.lat, center.lon], 15);
+  map = L.map('map', { zoomControl: true }).setView(
+    [center.lat, center.lon],
+    providerMeta?.defaultZoom || 15
+  );
 
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -247,10 +350,11 @@ async function goTo(raw) {
   hideResults();
 
   try {
-    const isCep = /^\d{5}-?\d{3}$/.test(q);
+    const cc = providerMeta?.countryCode || 'br';
+    const isCep = cc === 'br' && /^\d{5}-?\d{3}$/.test(q);
     const url = isCep
       ? `/api/geo/cep?cep=${q.replace(/\D+/g, '')}`
-      : `/api/geo/search?q=${encodeURIComponent(q)}`;
+      : `/api/geo/search?q=${encodeURIComponent(q)}&cc=${cc}`;
 
     const r = await fetch(url);
     if (!r.ok) throw new Error('busca falhou');
@@ -290,7 +394,7 @@ function renderMarkers() {
     if (d > radiusKm) continue;
 
     const isSel = selected.has(g.rep.apiId);
-    const st = status[g.rep.apiId]?.state;
+    const st = status[statusKey(g.rep.apiId)]?.state;
     const fill = isSel
       ? '#4fd18b'
       : st === 'live'
@@ -356,7 +460,7 @@ function renderList() {
   for (const { g, d } of rows) {
     const apiId = g.rep.apiId;
     const isSel = selected.has(apiId);
-    const st = status[apiId]?.state;
+    const st = status[statusKey(apiId)]?.state;
 
     const row = document.createElement('div');
     row.className = 'group' + (isSel ? ' selected' : '');
@@ -388,7 +492,7 @@ function renderList() {
     const badges = document.createElement('div');
     badges.style.cssText = 'display:flex;gap:4px;align-items:center';
 
-    if (st === 'live') badges.appendChild(badge('ao vivo', 'live'));
+    if (st === 'live') badges.appendChild(badge(providerMeta?.kind === 'snapshot' ? 'ok' : 'ao vivo', 'live'));
     else if (st === 'offline') badges.appendChild(badge('fora', 'offline'));
     else if (st === 'codec') badges.appendChild(badge('H.265', 'codec'));
 
@@ -505,6 +609,8 @@ el('search').addEventListener('keydown', (e) => {
 
 el('go').addEventListener('click', () => goTo(el('search').value));
 
+el('provider').addEventListener('change', (e) => changeProvider(e.target.value));
+
 el('clear').addEventListener('click', () => {
   if (!selected.size) return;
   selected.clear();
@@ -542,7 +648,30 @@ el('locate').addEventListener('click', () => {
 /*  Teste de cameras                                                   */
 /* ------------------------------------------------------------------ */
 
-function probe(apiId, timeout = 12000) {
+async function probe(apiId, timeout = 12000) {
+  const kind = providerMeta?.kind || 'whep';
+
+  // Foto: basta a imagem responder.
+  if (kind === 'snapshot') {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      const qs = new URLSearchParams({
+        provider: providerId,
+        id: apiId,
+        frame: '1',
+        t: String(Date.now()),
+      });
+      const r = await fetch('/api/snapshot?' + qs, { signal: ctrl.signal, cache: 'no-store' });
+      return r.ok ? 'live' : 'offline';
+    } catch {
+      return 'offline';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // WebRTC (WHEP): precisa negociar de verdade.
   return new Promise((resolve) => {
     let done = false;
     const video = document.createElement('video');
@@ -552,11 +681,16 @@ function probe(apiId, timeout = 12000) {
     video.style.cssText = 'position:fixed;left:-10px;top:-10px;width:2px;height:2px;opacity:0';
     document.body.appendChild(video);
 
-    const player = new CameraPlayer(apiId, video, (state) => {
-      if (state === 'live') finish('live');
-      else if (state === 'codec') finish('codec');
-      else if (state === 'offline') finish('offline');
-    });
+    const player = new CameraPlayer(
+      apiId,
+      video,
+      (state) => {
+        if (state === 'live') finish('live');
+        else if (state === 'codec') finish('codec');
+        else if (state === 'offline') finish('offline');
+      },
+      providerId
+    );
 
     const timer = setTimeout(() => finish('offline'), timeout);
 
@@ -593,7 +727,7 @@ async function runTests(ids) {
     while (index < ids.length && !cancelTest) {
       const id = ids[index++];
       const result = await probe(id);
-      status[id] = { state: result, at: Date.now() };
+      status[statusKey(id)] = { state: result, at: Date.now() };
       writeStatus(status);
       done += 1;
       setProgress(done, ids.length);
@@ -602,7 +736,10 @@ async function runTests(ids) {
     }
   };
 
-  await Promise.all([worker(), worker()]);
+  // WebRTC abre sessao no servidor publico: duas por vez, como antes.
+  // Foto e HLS sao leves: quatro por vez.
+  const workers = providerMeta?.kind === 'whep' ? 2 : 4;
+  await Promise.all(Array.from({ length: workers }, worker));
 
   testing = false;
   el('test').textContent = 'Testar';
@@ -658,7 +795,7 @@ async function save() {
     return { apiId, nome: cam?.nome || saved?.nome || '' };
   });
 
-  cfg = { center, radiusKm, layout, cameras };
+  cfg = { provider: providerId, center, radiusKm, layout, cameras };
 
   try {
     await putConfig(cfg);

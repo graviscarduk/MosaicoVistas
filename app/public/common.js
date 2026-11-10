@@ -1,7 +1,6 @@
 /** Utilidades compartilhadas pelo seletor e pelo mosaico. */
 
-export const padId = (id) =>
-  /^\d+$/.test(String(id)) ? String(id).padStart(6, '0') : String(id || '');
+export const padId = (id) => String(id ?? '').trim();
 
 export const norm = (s) =>
   String(s || '')
@@ -78,10 +77,17 @@ export async function putConfig(cfg) {
 }
 
 let camerasPromise = null;
-export function getCameras(force = false) {
-  if (force) camerasPromise = null;
+let camerasProvider = null;
+
+export function getCameras(provider, force = false) {
+  if (force || provider !== camerasProvider) {
+    camerasPromise = null;
+    camerasProvider = provider;
+  }
   if (!camerasPromise) {
-    camerasPromise = fetch('/api/cameras' + (force ? '?refresh=1' : ''))
+    const qs = new URLSearchParams({ provider: provider || 'cor-rio' });
+    if (force) qs.set('refresh', '1');
+    camerasPromise = fetch('/api/cameras?' + qs)
       .then((r) => {
         if (!r.ok) throw new Error('Falha ao buscar cameras');
         return r.json();
@@ -92,6 +98,31 @@ export function getCameras(force = false) {
       });
   }
   return camerasPromise;
+}
+
+let providersPromise = null;
+export function getProviders() {
+  if (!providersPromise) {
+    providersPromise = fetch('/api/providers')
+      .then((r) => {
+        if (!r.ok) throw new Error('Falha ao buscar as cidades');
+        return r.json();
+      })
+      .catch((e) => {
+        providersPromise = null;
+        throw e;
+      });
+  }
+  return providersPromise;
+}
+
+/** Como esta camera deve ser exibida: whep, hls ou snapshot. */
+export function getStream(provider, id) {
+  const qs = new URLSearchParams({ provider: provider || 'cor-rio', id });
+  return fetch('/api/stream?' + qs).then((r) => {
+    if (!r.ok) throw new Error('Falha ao consultar a camera');
+    return r.json();
+  });
 }
 
 /* ---- ciclo de vida: encerra o servico quando a pagina fecha ---- */

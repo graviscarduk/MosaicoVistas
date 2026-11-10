@@ -5,7 +5,8 @@
 [![Plataforma](https://img.shields.io/badge/plataforma-Windows%2010%2F11-0078D6)](#requisitos)
 
 Aplicativo **portátil** para Windows que exibe câmeras de ruas em um mosaico, com
-seleção por mapa.
+seleção por mapa. Reúne câmeras de trânsito públicas de várias cidades; o Rio de
+Janeiro tem vídeo ao vivo e as demais fontes publicam fotos atualizadas.
 
 Nada é instalado no computador: o app sobe um servidor local usando o runtime
 Node.js incluído no pacote e abre a interface no seu navegador. Não abre portas
@@ -17,13 +18,31 @@ no firewall.
    e baixe o arquivo `Mosaico-Vistas-v*.zip`.
 2. Extraia o ZIP **inteiro** para uma pasta (a Área de Trabalho serve).
 3. Dê um duplo clique em **`Mosaico Vistas.vbs`**.
-4. O navegador abre sozinho: escolha a região e as câmeras.
+4. O navegador abre sozinho: escolha a cidade, a região e as câmeras.
 5. Ao fechar a última aba, o serviço se encerra sozinho.
 
 Para encerrar manualmente, use **`Parar Mosaico.vbs`**.
 
 > Se o Windows avisar que o arquivo veio da internet: clique com o botão direito
 > no ZIP → **Propriedades** → **Desbloquear**, antes de extrair.
+
+## Cidades disponíveis
+
+| Cidade | Fonte | Modo |
+|---|---|---|
+| Rio de Janeiro | COR-Rio | **vídeo ao vivo** (WebRTC/WHEP, H.265) |
+| São Paulo | CET | fotos (sequência de ~1,1 s) |
+| Madrid | Informo / Ayuntamiento | fotos (atualização ~2 min) |
+| Los Angeles | Caltrans (distrito 7) | fotos (atualização ~2 min) |
+
+A prioridade do projeto é **vídeo**. Entre as fontes públicas verificadas, só o
+Rio de Janeiro publica vídeo acessível sem cadastro; as demais publicam fotos.
+Cidades como Curitiba, Porto Alegre, Fortaleza, Santos, Barcelona, Lisboa,
+Buenos Aires e Santiago não mantêm um feed público de câmeras de trânsito.
+
+As imagens pertencem às respectivas prefeituras/órgãos de trânsito. O app apenas
+exibe o que já é público, mantém a atribuição na tela e não deve ser usado
+comercialmente.
 
 ## Requisitos
 
@@ -32,7 +51,7 @@ Para encerrar manualmente, use **`Parar Mosaico.vbs`**.
 
 ### Se o vídeo não aparecer
 
-As câmeras do COR transmitem em **H.265 (HEVC)**. Para visualizar:
+O vídeo ao vivo (Rio de Janeiro) usa **H.265 (HEVC)**. Para visualizar:
 
 - Use Chrome ou Edge no Windows.
 - Instale a extensão **HEVC** da Microsoft Store (aprox. US$ 1).
@@ -46,6 +65,7 @@ Firefox e Chrome no Linux não decodificam H.265 e não exibirão o vídeo.
 Mosaico Vistas.vbs      inicia o app (sem janela de console)
 Parar Mosaico.vbs       encerra o app
 app/server.mjs          servidor local + proxy das câmeras
+app/providers/          fontes por cidade (lista e modo de exibição)
 app/public/             interface (seleção, mosaico, player)
 app/config.json         configuração padrão
 LEIA-ME.txt             instruções rápidas para o usuário final
@@ -66,6 +86,23 @@ npm start          # sobe o servidor local em http://127.0.0.1:8787/
 
 A interface fica em `app/public/` e o servidor em `app/server.mjs`. Após alterar,
 reinicie o processo para aplicar.
+
+### Adicionar uma cidade
+
+Cada cidade é um módulo em `app/providers/` com a interface:
+
+```js
+{
+  id, label, attribution, creditUrl, kind,   // 'whep' ou 'snapshot'
+  defaultCenter, defaultZoom, defaultRadiusKm, maxRadiusKm,
+  listCameras(),   // [{ id, nome, lat, lon }]
+  stream(camera)   // { kind: 'whep' } ou { kind: 'snapshot', url, refreshMs, frames }
+}
+```
+
+Registre o módulo em `app/providers/index.mjs`. O servidor expõe
+`/api/providers`, `/api/cameras?provider=`, `/api/stream?provider=&id=` e
+`/api/snapshot?provider=&id=&frame=`; a interface se adapta ao `kind`.
 
 ### Gerar o pacote localmente
 

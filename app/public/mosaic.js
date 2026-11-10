@@ -1,6 +1,8 @@
 import {
   getConfig,
   getCameras,
+  getProviders,
+  getStream,
   putConfig,
   padId,
   prettyName,
@@ -12,11 +14,11 @@ import {
 import { CameraPlayer } from './player.js';
 
 startKeepAlive();
-warnIfNoH265();
 
 const grid = document.getElementById('grid');
 const clockEl = document.getElementById('clock');
 const centerLabel = document.getElementById('center-label');
+const creditEl = document.getElementById('credit');
 
 const RETRY_DELAYS = [5, 10, 20, 40, 60];
 
@@ -29,6 +31,10 @@ const ICON = {
 };
 
 let cfg = null;
+let providerId = 'cor-rio';
+let providerMeta = null;
+let kind = 'whep';
+
 const cameras = new Map();
 let tiles = [];
 let activeTile = null;
@@ -50,11 +56,38 @@ setInterval(tickClock, 1000);
 
 async function boot() {
   cfg = await getConfig();
-  centerLabel.textContent = cfg.center?.label || 'Rio de Janeiro';
+
+  providerId = cfg.provider || 'cor-rio';
+
+  try {
+    const pj = await getProviders();
+    providerMeta = (pj.providers || []).find((p) => p.id === providerId) || null;
+  } catch (err) {
+    console.warn('Lista de cidades indisponivel:', err);
+  }
+
+  kind = providerMeta?.kind || 'whep';
+
+  if (providerId === 'cor-rio') warnIfNoH265();
+
+  document.title = `Mosaico Vistas — ${providerMeta?.label || 'Rio de Janeiro'}`;
+  centerLabel.textContent = cfg.center?.label || providerMeta?.label || 'Rio de Janeiro';
+
+  if (creditEl) {
+    creditEl.textContent = providerMeta?.attribution || '';
+    if (providerMeta?.creditUrl) {
+      creditEl.href = providerMeta.creditUrl;
+      creditEl.target = '_blank';
+      creditEl.rel = 'noopener noreferrer';
+    } else {
+      creditEl.removeAttribute('href');
+    }
+  }
+
   applyLayoutUI();
 
   try {
-    const list = await getCameras();
+    const list = await getCameras(providerId);
     for (const c of list) cameras.set(padId(c.apiId), c);
   } catch (err) {
     console.warn('Lista de cameras indisponivel:', err);
@@ -81,7 +114,7 @@ function applyLayoutUI() {
 /**
  * Monta a grade reaproveitando os tiles que continuam na tela.
  *
- * Trocar 2x2 -> 3x3 nao pode derrubar as 4 transmissoes que ja estao
+ * Trocar 2x2 -> 3x3 nao pode derrubar as transmissoes que ja estao
  * rodando: o COR limita tentativas por camera (HTTP 429) e reabrir tudo
  * de uma vez derruba o mosaico inteiro. So entram/saem os tiles que
  * realmente mudaram.
@@ -176,7 +209,6 @@ function makeTile(entry, startDelay = 0) {
   const el = document.createElement('div');
   el.className = 'tile';
   el.innerHTML = `
-    <video autoplay muted playsinline></video>
     <div class="tile-bar">
       <span class="dot" data-state="connecting"></span>
       <span class="tile-name"></span>
@@ -190,7 +222,6 @@ function makeTile(entry, startDelay = 0) {
       <button class="btn retry">Tentar de novo</button>
     </div>`;
 
-  const video = el.querySelector('video');
   const dot = el.querySelector('.dot');
   const nameEl = el.querySelector('.tile-name');
   const metaEl = el.querySelector('.tile-meta');
@@ -209,15 +240,21 @@ function makeTile(entry, startDelay = 0) {
     const km = haversineKm(cfg.center.lat, cfg.center.lon, +info.lat, +info.lon);
     bits.push(fmtKm(km));
   }
+  if (kind === 'snapshot') bits.push('foto');
   metaEl.textContent = bits.join(' · ');
+
+  if (kind === 'snapshot') muteBtn.hidden = true;
 
   const tile = {
     apiId,
     el,
-    video,
+    media: null,
     player: null,
+    snapTimer: null,
+    startTimer: null,
     attempt: 0,
     timer: null,
+    gen: 0,
     baseHint: '',
     setName(next) {
       const n = prettyName(next?.nome || apiId);
@@ -225,10 +262,19 @@ function makeTile(entry, startDelay = 0) {
       nameEl.title = n;
     },
     stop() {
+      this.gen += 1;
       clearTimeout(this.startTimer);
       clearInterval(this.timer);
+      clearTimeout(this.snapTimer);
       this.timer = null;
+      this.snapTimer = null;
       this.player?.stop(true);
+      this.player = null;
+      if (this.media) {
+        if (this.media.tagName === 'VIDEO') this.media.srcObject = null;
+        this.media.remove();
+        this.media = null;
+      }
     },
     retry() {
       this.attempt = 0;
@@ -236,55 +282,62 @@ function makeTile(entry, startDelay = 0) {
     },
   };
 
-  const player = new CameraPlayer(apiId, video, (state, msg, info) => {
-    dot.dataset.state = state;
+  /** A conexao atual ainda vale? (evita callbacks de uma tentativa antiga) */
+  const alive = (gen) => gen === tile.gen;
 
-    if (state === 'live') {
-      clearInterval(tile.timer);
-      tile.timer = null;
-      tile.attempt = 0;
-      msgEl.hidden = true;
-      return;
-    }
-
-    if (state === 'codec') {
-      clearInterval(tile.timer);
-      tile.timer = null;
-      showError(
-        'Codec nao suportado',
-        'Esta camera transmite em H.265 (HEVC) e este navegador nao consegue decodificar.'
-      );
-      return;
-    }
-
-    if (state === 'offline') {
-      showError('Camera fora do ar', msg || 'Sem sinal no momento.');
-      // 429 = o COR bloqueou novas tentativas para esta camera; esperar mais.
-      scheduleRetry(info?.status === 429 ? 25 : 0);
-    }
-  });
-
-  tile.player = player;
+  function markLive() {
+    dot.dataset.state = 'live';
+    clearInterval(tile.timer);
+    clearTimeout(tile.snapTimer);
+    tile.timer = null;
+    tile.snapTimer = null;
+    tile.attempt = 0;
+    msgEl.hidden = true;
+  }
 
   function showError(title, hint) {
+    dot.dataset.state = 'offline';
     titleEl.textContent = title;
     hintEl.textContent = hint;
     tile.baseHint = hint;
     msgEl.hidden = false;
-    video.srcObject = null;
+    if (tile.media && tile.media.tagName === 'VIDEO') tile.media.srcObject = null;
   }
 
-  function connect() {
-    clearTimeout(tile.startTimer);
-    clearInterval(tile.timer);
-    tile.timer = null;
-    msgEl.hidden = true;
-    dot.dataset.state = 'connecting';
-    player.start();
+  function setMedia(media) {
+    if (tile.media) tile.media.remove();
+    tile.media = media;
+    el.prepend(media);
+
+    media.addEventListener('click', () => {
+      if (document.fullscreenElement === el) return;
+      toggleFullscreen(el);
+    });
+  }
+
+  function newVideo() {
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.addEventListener('volumechange', updateMuteIcon);
+    video.addEventListener('playing', () => {
+      if (alive(tile.gen)) markLive();
+    });
+    setMedia(video);
+    return video;
+  }
+
+  function updateMuteIcon() {
+    const video = tile.media;
+    if (!video || video.tagName !== 'VIDEO') return;
+    muteBtn.innerHTML = video.muted ? ICON.mute : ICON.sound;
+    muteBtn.title = video.muted ? 'Ligar som' : 'Desligar som';
   }
 
   function scheduleRetry(minDelay = 0) {
     clearInterval(tile.timer);
+    clearTimeout(tile.snapTimer);
     const base = RETRY_DELAYS[Math.min(tile.attempt, RETRY_DELAYS.length - 1)];
     const delay = Math.max(base, minDelay);
     tile.attempt += 1;
@@ -305,17 +358,111 @@ function makeTile(entry, startDelay = 0) {
     tick();
   }
 
+  function startWhep(gen) {
+    const video = newVideo();
+    const player = new CameraPlayer(
+      apiId,
+      video,
+      (state, msg, info) => {
+        if (!alive(gen)) return;
+        dot.dataset.state = state;
+
+        if (state === 'live') {
+          markLive();
+          return;
+        }
+
+        if (state === 'codec') {
+          clearInterval(tile.timer);
+          tile.timer = null;
+          showError(
+            'Codec nao suportado',
+            'Esta camera transmite em H.265 (HEVC) e este navegador nao consegue decodificar.'
+          );
+          return;
+        }
+
+        if (state === 'offline') {
+          showError('Camera fora do ar', msg || 'Sem sinal no momento.');
+          // 429 = o COR bloqueou novas tentativas para esta camera; esperar mais.
+          scheduleRetry(info?.status === 429 ? 25 : 0);
+        }
+      },
+      providerId
+    );
+
+    tile.player = player;
+    player.start();
+  }
+
+  function startSnapshot(stream, gen) {
+    const img = document.createElement('img');
+    img.alt = nome;
+    setMedia(img);
+
+    const frames = Math.max(1, Number(stream.frames) || 1);
+    const refreshMs = Math.max(300, Number(stream.refreshMs) || 1500);
+    let frame = 1;
+    let loaded = false;
+
+    const load = () => {
+      if (!alive(gen)) return;
+      img.src = String(stream.url).replace('{frame}', String(frame));
+    };
+
+    img.addEventListener('load', () => {
+      if (!alive(gen)) return;
+      if (!loaded) {
+        loaded = true;
+        markLive();
+      }
+      frame = (frame % frames) + 1;
+      tile.snapTimer = setTimeout(load, refreshMs);
+    });
+
+    img.addEventListener('error', () => {
+      if (!alive(gen)) return;
+      showError('Imagem indisponivel', 'A fonte publica nao respondeu a esta camera.');
+      scheduleRetry();
+    });
+
+    load();
+  }
+
+  async function connect() {
+    clearTimeout(tile.startTimer);
+    clearInterval(tile.timer);
+    clearTimeout(tile.snapTimer);
+    tile.timer = null;
+    tile.snapTimer = null;
+
+    const gen = ++tile.gen;
+
+    msgEl.hidden = true;
+    dot.dataset.state = 'connecting';
+
+    tile.player?.stop(true);
+    tile.player = null;
+
+    try {
+      const stream = await getStream(providerId, apiId);
+      if (!alive(gen)) return;
+
+      if (stream.kind === 'snapshot') startSnapshot(stream, gen);
+      else startWhep(gen);
+    } catch (err) {
+      if (!alive(gen)) return;
+      showError('Camera indisponivel', String(err?.message || err));
+      scheduleRetry();
+    }
+  }
+
   /* ---- interacao ---- */
 
   el.addEventListener('pointerdown', () => setActive(tile));
 
   el.addEventListener('dblclick', (e) => {
     if (e.target.closest('button')) return;
-    toggleFullscreen(el);
-  });
-
-  video.addEventListener('click', () => {
-    if (document.fullscreenElement === el) return;
     toggleFullscreen(el);
   });
 
@@ -326,6 +473,8 @@ function makeTile(entry, startDelay = 0) {
 
   muteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    const video = tile.media;
+    if (!video || video.tagName !== 'VIDEO') return;
     setMuted(tile, !video.muted);
   });
 
@@ -334,12 +483,7 @@ function makeTile(entry, startDelay = 0) {
     tile.retry();
   });
 
-  video.addEventListener('volumechange', () => {
-    muteBtn.innerHTML = video.muted ? ICON.mute : ICON.sound;
-    muteBtn.title = video.muted ? 'Ligar som' : 'Desligar som';
-  });
-
-  // comeca conectado (escalonado: 4 negociacoes ao mesmo tempo atrapalham)
+  // comeca conectado (escalonado: varias negociacoes ao mesmo tempo atrapalham)
   tile.startTimer = setTimeout(connect, startDelay);
 
   return tile;
@@ -351,7 +495,8 @@ function makeTile(entry, startDelay = 0) {
 
 function setMuted(tile, muted) {
   for (const t of tiles) {
-    t.video.muted = t === tile ? muted : true;
+    if (!t.media || t.media.tagName !== 'VIDEO') continue;
+    t.media.muted = t === tile ? muted : true;
   }
 }
 
@@ -401,7 +546,9 @@ document.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
 
   if (k === 'f' && activeTile) toggleFullscreen(activeTile.el);
-  if (k === 'm' && activeTile) setMuted(activeTile, !activeTile.video.muted);
+  if (k === 'm' && activeTile?.media?.tagName === 'VIDEO') {
+    setMuted(activeTile, !activeTile.media.muted);
+  }
   if (k === 'r' && activeTile) activeTile.retry();
 });
 

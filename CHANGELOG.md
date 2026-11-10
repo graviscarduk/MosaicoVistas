@@ -5,6 +5,30 @@ Todas as mudanças relevantes deste projeto são registradas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o
 projeto usa [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [1.1.0] - 2026-11-10
+
+### Adicionado
+
+- Seletor de cidade no app: Rio de Janeiro, São Paulo, Madrid e Los Angeles.
+- Camadas de provedores (`app/providers/`) com lista e modo de exibição por cidade.
+- Modo foto no mosaico, com atualização automática e sequência de quadros quando
+  a fonte publica várias imagens (CET-SP).
+- Busca por endereço ajustada ao país da cidade (CEP só no Brasil).
+- Atribuição e link da fonte visíveis no seletor e no mosaico.
+
+### Alterado
+
+- O mosaico agora reaproveita tiles de vídeo **ou** de imagem sem reiniciar os
+  que já estão na tela.
+- O teste de câmeras do seletor reconhece os modos vídeo e foto.
+- `config.json` guarda a cidade escolhida (`provider`); configurações antigas
+  continuam funcionando e assumem o Rio de Janeiro.
+
+### Observado
+
+- Entre as fontes públicas verificadas, apenas o Rio de Janeiro transmite vídeo
+  acessível. São Paulo, Madrid e Los Angeles publicam fotos.
+
 ## [1.0.0] - 2026-11-08
 
 ### Adicionado

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Escolher câmeras — Mosaico COR-Rio</title>
+  <title>Escolher câmeras — Mosaico Vistas</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0f11'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%234fd18b'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="app.css">
@@ -25,6 +25,11 @@
 
     <aside class="side">
       <div class="side-head">
+        <div class="provider-row">
+          <label for="provider">Cidade</label>
+          <select id="provider" hidden></select>
+        </div>
+
         <div class="search">
           <span class="mono" style="color: var(--muted-2)">⌕</span>
           <input id="search" type="search" placeholder="CEP, rua, bairro ou ponto" autocomplete="off" spellcheck="false">
@@ -65,6 +70,7 @@
           <div class="spacer"></div>
           <button class="btn primary" id="save">Salvar e abrir</button>
         </div>
+        <a class="credit" id="credit" target="_blank" rel="noopener noreferrer"></a>
         <div class="note">Clique numa câmera para adicionar ou remover. Enter no campo de busca leva o mapa até o endereço. Botão direito no mapa escolhe um ponto.</div>
       </div>
     </aside>

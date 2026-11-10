@@ -22,6 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exec, execFile } from 'node:child_process';
 import os from 'node:os';
+import { getProvider, publicProviders, DEFAULT_PROVIDER } from './providers/index.mjs';
+import { COR_HEADERS, COR_PLAYER } from './providers/cor-rio.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -36,31 +38,18 @@ const CONFIG_FALLBACK = path.join(
 );
 let configFile = CONFIG_FILE;
 
-const COR = 'https://appcor.cor-rio.work';
-const LIST_URL = COR + '/api/cameras/?limit=0';
-const PLAYER = COR + '/api/camera/player';
-
-// Sem estes headers o COR responde 403 (exigencia desde 24/10/2026).
-const COR_HEADERS = {
-  Origin: COR,
-  Referer: COR + '/',
-  Accept: 'application/json, text/plain, */*',
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
-};
-
 const LIST_TTL_MS = 5 * 60 * 1000;
 const MAX_BODY = 1024 * 1024;
+const SNAPSHOT_MAX = 200;
 
 const DEFAULT_CONFIG = {
+  provider: DEFAULT_PROVIDER,
   center: { lat: -22.9068, lon: -43.1729, label: 'Rio de Janeiro' },
   radiusKm: 1.5,
   layout: { cols: 2, rows: 2 },
   cameras: [],
 };
 
-let listCache = { at: 0, data: null };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +59,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function sanitizeConfig(input) {
   const cfg = structuredClone(DEFAULT_CONFIG);
   if (!input || typeof input !== 'object') return cfg;
+
+  const providerId = typeof input.provider === 'string' ? input.provider.trim() : '';
+  if (getProvider(providerId)) cfg.provider = providerId;
 
   if (input.center && typeof input.center === 'object') {
     const lat = Number(input.center.lat);
@@ -81,8 +73,11 @@ function sanitizeConfig(input) {
     }
   }
 
+  const provider = getProvider(cfg.provider);
+  const maxRadius = provider?.maxRadiusKm || 10;
+
   const radius = Number(input.radiusKm);
-  if (Number.isFinite(radius)) cfg.radiusKm = Math.min(10, Math.max(0.1, radius));
+  if (Number.isFinite(radius)) cfg.radiusKm = Math.min(maxRadius, Math.max(0.1, radius));
 
   if (input.layout && typeof input.layout === 'object') {
     const cols = Number(input.layout.cols);
@@ -96,8 +91,14 @@ function sanitizeConfig(input) {
     const cameras = [];
     for (const item of input.cameras) {
       if (!item || typeof item !== 'object') continue;
-      const apiId = String(item.apiId ?? '').replace(/\D+/g, '').slice(0, 12);
-      if (!apiId || seen.has(apiId)) continue;
+      let apiId = String(item.apiId ?? '').trim().slice(0, 64);
+
+      // Configs antigas do COR podem ter o id sem os zeros a esquerda.
+      if (cfg.provider === 'cor-rio' && /^\d+$/.test(apiId)) {
+        apiId = apiId.padStart(6, '0');
+      }
+
+      if (!apiId || !/^[A-Za-z0-9_.:-]+$/.test(apiId) || seen.has(apiId)) continue;
       seen.add(apiId);
       const nome = typeof item.nome === 'string' ? item.nome.slice(0, 160) : '';
       cameras.push({ apiId, nome });
@@ -144,41 +145,111 @@ async function saveConfig(cfg) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  API do COR                                                         */
+/*  Providers de cameras                                               */
 /* ------------------------------------------------------------------ */
 
-async function fetchCameras(force = false) {
-  const fresh = listCache.data && Date.now() - listCache.at < LIST_TTL_MS;
-  if (fresh && !force) return listCache.data;
+const cameraLists = new Map(); // providerId -> { at, data }
+const snapshotCache = new Map(); // provider:id:frame -> { at, buf, type, ttl }
 
-  const data = await fetchPreferFull();
-  if (!data.length) {
-    if (listCache.data) return listCache.data; // mantem o ultimo bom
-    throw new Error('Nao foi possivel obter a lista de cameras do COR');
+function requireProvider(id) {
+  const provider = getProvider(id);
+  if (!provider) {
+    const err = new Error('Cidade (provider) desconhecida');
+    err.status = 400;
+    throw err;
   }
-  listCache = { at: Date.now(), data };
+  return provider;
+}
+
+async function providerCameras(providerId, force = false) {
+  const provider = requireProvider(providerId);
+  const hit = cameraLists.get(provider.id);
+  if (!force && hit && Date.now() - hit.at < LIST_TTL_MS) return hit.data;
+
+  const data = await provider.listCameras(force);
+  cameraLists.set(provider.id, { at: Date.now(), data });
   return data;
 }
 
-// A API alterna entre a versao completa (com cameraId) e uma "lite"
-// (so coordenadas). Insistimos ate vir a completa.
-async function fetchPreferFull(tries = 10) {
-  let best = [];
-  for (let i = 0; i < tries; i++) {
-    try {
-      const r = await fetch(LIST_URL, { headers: COR_HEADERS, cache: 'no-store' });
-      if (r.ok) {
-        const j = await r.json();
-        const arr = Array.isArray(j) ? j : j.cameras || [];
-        if (arr.length >= best.length) best = arr;
-        if (arr.some((c) => c && c.cameraId && c.apiId)) return arr;
-      }
-    } catch {
-      /* tenta de novo */
-    }
-    await sleep(400);
+async function findCamera(providerId, cameraId) {
+  const list = await providerCameras(providerId);
+  return list.find((c) => c.id === cameraId) || null;
+}
+
+async function streamInfo(providerId, cameraId) {
+  const provider = requireProvider(providerId);
+  const camera = await findCamera(providerId, cameraId);
+  if (!camera) {
+    const err = new Error('Camera nao encontrada nesta cidade');
+    err.status = 404;
+    throw err;
   }
-  return best;
+  const stream = await provider.stream(camera);
+
+  if (stream.kind === 'snapshot') {
+    return {
+      kind: 'snapshot',
+      refreshMs: stream.refreshMs || 5000,
+      frames: stream.frames || 1,
+      url:
+        `/api/snapshot?provider=${encodeURIComponent(provider.id)}` +
+        `&id=${encodeURIComponent(cameraId)}&frame={frame}`,
+    };
+  }
+
+  return { kind: stream.kind, url: stream.url || null };
+}
+
+async function getSnapshot(providerId, cameraId, frame) {
+  const provider = requireProvider(providerId);
+  const camera = await findCamera(providerId, cameraId);
+  if (!camera) {
+    const err = new Error('Camera nao encontrada nesta cidade');
+    err.status = 404;
+    throw err;
+  }
+
+  const stream = await provider.stream(camera);
+  if (stream.kind !== 'snapshot') throw new Error('Esta camera nao usa imagem estatica');
+
+  const n = Math.max(1, Math.min(Number(frame) || 1, stream.frames || 1));
+  const key = `${provider.id}:${camera.id}:${n}`;
+  const hit = snapshotCache.get(key);
+  if (hit && Date.now() - hit.at < hit.ttl) return hit;
+
+  const url = stream.url.replace('{frame}', String(n));
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
+      Accept: 'image/jpeg,image/*;q=0.9,*/*;q=0.8',
+      ...(provider.imageHeaders || {}),
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!r.ok) throw new Error(`Imagem respondeu HTTP ${r.status}`);
+
+  const entry = {
+    at: Date.now(),
+    type: r.headers.get('content-type') || 'image/jpeg',
+    buf: Buffer.from(await r.arrayBuffer()),
+    ttl: Math.max(1000, stream.refreshMs || 5000),
+  };
+
+  if (snapshotCache.size >= SNAPSHOT_MAX) {
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const [k, v] of snapshotCache) {
+      if (v.at < oldestAt) {
+        oldestAt = v.at;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) snapshotCache.delete(oldestKey);
+  }
+  snapshotCache.set(key, entry);
+  return entry;
 }
 
 /* ------------------------------------------------------------------ */
@@ -224,8 +295,8 @@ async function geoJson(url) {
 }
 
 /** Busca livre: rua, bairro, ponto de referencia. */
-async function geoSearch(q, limit = 6) {
-  const key = `s:${q.toLowerCase()}:${limit}`;
+async function geoSearch(q, limit = 6, cc = 'br') {
+  const key = `s:${cc}:${q.toLowerCase()}:${limit}`;
   const cached = cacheGet(key);
   if (cached) return cached;
 
@@ -235,7 +306,7 @@ async function geoSearch(q, limit = 6) {
   url.searchParams.set('limit', String(limit));
   url.searchParams.set('addressdetails', '1');
   url.searchParams.set('accept-language', 'pt-BR');
-  url.searchParams.set('countrycodes', 'br');
+  if (cc) url.searchParams.set('countrycodes', cc);
 
   const raw = await geoJson(url);
   const results = (Array.isArray(raw) ? raw : []).map((r) => ({
@@ -420,7 +491,7 @@ async function stopAllSessions() {
   sessions.clear();
   const stop = Promise.allSettled(
     list.map((sid) =>
-      proxySignal(`${PLAYER}/session/stop/`, 'application/json', JSON.stringify({ sessionId: sid }))
+      proxySignal(`${COR_PLAYER}/session/stop/`, 'application/json', JSON.stringify({ sessionId: sid }))
     )
   );
   await Promise.race([stop, sleep(2500)]);
@@ -512,18 +583,59 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   try {
+    /* ---- cidades disponiveis ---- */
+    if (req.method === 'GET' && p === '/api/providers') {
+      return sendJSON(res, 200, {
+        providers: publicProviders(),
+        default: DEFAULT_PROVIDER,
+      });
+    }
+
     /* ---- lista de cameras ---- */
     if (req.method === 'GET' && p === '/api/cameras') {
+      const providerId = url.searchParams.get('provider') || DEFAULT_PROVIDER;
       const force = url.searchParams.get('refresh') === '1';
-      const data = await fetchCameras(force);
-      return sendJSON(res, 200, data);
+      const data = await providerCameras(providerId, force);
+
+      // O resto do app sempre falou "apiId"; mantemos o nome para nao
+      // espalhar mudanca pelo seletor e pela configuracao.
+      return sendJSON(
+        res,
+        200,
+        data.map((c) => ({ apiId: c.id, nome: c.nome, lat: c.lat, lon: c.lon }))
+      );
+    }
+
+    /* ---- como assistir esta camera (whep / hls / snapshot) ---- */
+    if (req.method === 'GET' && p === '/api/stream') {
+      const providerId = url.searchParams.get('provider') || DEFAULT_PROVIDER;
+      const id = (url.searchParams.get('id') || '').trim();
+      if (!id) return sendJSON(res, 400, { error: 'id ausente' });
+      return sendJSON(res, 200, await streamInfo(providerId, id));
+    }
+
+    /* ---- proxy de imagem (snapshot) ---- */
+    if (req.method === 'GET' && p === '/api/snapshot') {
+      const providerId = url.searchParams.get('provider') || DEFAULT_PROVIDER;
+      const id = (url.searchParams.get('id') || '').trim();
+      const frame = url.searchParams.get('frame') || '1';
+      if (!id) return sendJSON(res, 400, { error: 'id ausente' });
+
+      const img = await getSnapshot(providerId, id, frame);
+      res.writeHead(200, {
+        'Content-Type': img.type,
+        'Content-Length': img.buf.length,
+        'Cache-Control': `public, max-age=${Math.round(img.ttl / 1000)}`,
+      });
+      return res.end(img.buf);
     }
 
     /* ---- geocodificacao ---- */
     if (req.method === 'GET' && p === '/api/geo/search') {
       const q = (url.searchParams.get('q') || '').trim();
       if (q.length < 3) return sendJSON(res, 400, { error: 'busca muito curta' });
-      const results = await geoSearch(q.slice(0, 160));
+      const cc = (url.searchParams.get('cc') || 'br').replace(/[^a-z]/gi, '').slice(0, 2);
+      const results = await geoSearch(q.slice(0, 160), 6, cc);
       return sendJSON(res, 200, { results });
     }
 
@@ -573,10 +685,19 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (p.startsWith('/api/session/start/')) {
-        const id = decodeURIComponent(p.slice('/api/session/start/'.length));
+        const rest = decodeURIComponent(p.slice('/api/session/start/'.length));
+        const parts = rest.split('/').filter(Boolean);
+        const providerId = parts.length > 1 ? parts[0] : DEFAULT_PROVIDER;
+        const id = parts.length > 1 ? parts[1] : parts[0];
+
+        const provider = getProvider(providerId);
+        if (!provider || provider.kind !== 'whep') {
+          return sendJSON(res, 400, { error: 'esta cidade nao usa video WebRTC' });
+        }
         if (!/^[A-Za-z0-9_-]+$/.test(id)) return sendJSON(res, 400, { error: 'id invalido' });
+
         const r = await proxySignal(
-          `${PLAYER}/session/start/${encodeURIComponent(id)}/`,
+          `${COR_PLAYER}/session/start/${encodeURIComponent(id)}/`,
           'application/json',
           '{}'
         );
@@ -585,12 +706,18 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (p === '/api/whep') {
+        const providerId = url.searchParams.get('provider') || DEFAULT_PROVIDER;
+        const provider = getProvider(providerId);
+        if (!provider || provider.kind !== 'whep') {
+          return sendJSON(res, 400, { error: 'esta cidade nao usa video WebRTC' });
+        }
+
         const sid = req.headers['x-camera-session'];
         if (typeof sid !== 'string' || !/^[A-Za-z0-9_-]+$/.test(sid)) {
           return sendJSON(res, 400, { error: 'sessao invalida' });
         }
         sessions.add(sid);
-        const r = await proxySignal(`${PLAYER}/whep/`, 'application/sdp', body, {
+        const r = await proxySignal(`${COR_PLAYER}/whep/`, 'application/sdp', body, {
           'X-Camera-Session': sid,
         });
         res.writeHead(r.status, r.headers);
@@ -609,7 +736,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (p === '/api/stop') sessions.delete(payload.sessionId);
         const target = p === '/api/heartbeat' ? '/session/heartbeat/' : '/session/stop/';
-        const r = await proxySignal(`${PLAYER}${target}`, 'application/json', JSON.stringify(payload));
+        const r = await proxySignal(`${COR_PLAYER}${target}`, 'application/json', JSON.stringify(payload));
         return sendText(res, r.status, r.body, r.headers['Content-Type']);
       }
 
@@ -617,10 +744,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/health') {
+      const hit = cameraLists.get(DEFAULT_PROVIDER);
       return sendJSON(res, 200, {
         ok: true,
-        cameras: listCache.data ? listCache.data.length : 0,
-        ageSeconds: listCache.at ? Math.round((Date.now() - listCache.at) / 1000) : null,
+        cameras: hit ? hit.data.length : 0,
+        ageSeconds: hit ? Math.round((Date.now() - hit.at) / 1000) : null,
+        providers: publicProviders().length,
         autoClose: AUTO_CLOSE,
         clients: clients.size,
       });
@@ -632,13 +761,17 @@ const server = http.createServer(async (req, res) => {
 
     return sendText(res, 405, 'Method not allowed');
   } catch (err) {
+    const status = Number(err?.status) || 502;
     const cause = err?.cause
       ? ` | cause: ${err.cause.code || err.cause.message || err.cause}${
           err.cause.hostname ? ` host=${err.cause.hostname}` : ''
         }`
       : '';
-    console.error('[erro]', (err?.message || err) + cause);
-    return sendJSON(res, 502, { error: String(err?.message || err), cause: cause.trim() || undefined });
+    if (status >= 500) console.error('[erro]', (err?.message || err) + cause);
+    return sendJSON(res, status, {
+      error: String(err?.message || err),
+      cause: cause.trim() || undefined,
+    });
   }
 });
 

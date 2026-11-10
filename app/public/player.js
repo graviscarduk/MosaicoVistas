@@ -2,10 +2,10 @@
  * Player WebRTC (WHEP) das cameras do COR-Rio.
  *
  * Fluxo (o mesmo do app oficial):
- *   POST /api/session/start/{apiId}/   -> { sessionId }
- *   POST /api/whep                     -> SDP answer (+ header Link com TURN)
- *   POST /api/heartbeat                -> a cada 20s
- *   POST /api/stop                     -> ao encerrar
+ *   POST /api/session/start/{provider}/{apiId}/ -> { sessionId }
+ *   POST /api/whep?provider=...                -> SDP answer (+ header Link com TURN)
+ *   POST /api/heartbeat                        -> a cada 20s
+ *   POST /api/stop                             -> ao encerrar
  *
  * O header Link traz os servidores TURN. Como o RTCPeerConnection precisa
  * deles ja na criacao, na primeira vez fazemos uma negociacao extra so para
@@ -118,9 +118,11 @@ export class CameraPlayer {
    * @param {string} apiId
    * @param {HTMLVideoElement} video
    * @param {(state: 'connecting'|'live'|'offline'|'codec'|'idle', msg?: string) => void} onState
+   * @param {string} provider  cidade de origem (ex.: 'cor-rio')
    */
-  constructor(apiId, video, onState) {
+  constructor(apiId, video, onState, provider = 'cor-rio') {
     this.apiId = apiId;
+    this.provider = provider;
     this.video = video;
     this.onState = onState;
     this.gen = 0;
@@ -199,11 +201,14 @@ export class CameraPlayer {
   async #startSession(gen) {
     await acquireStart();
     try {
-      const r = await signalFetch(`/api/session/start/${encodeURIComponent(this.apiId)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
+      const r = await signalFetch(
+        `/api/session/start/${encodeURIComponent(this.provider)}/${encodeURIComponent(this.apiId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        }
+      );
       const text = await r.text();
       if (gen !== this.gen) return null;
       if (!r.ok) {
@@ -244,7 +249,7 @@ export class CameraPlayer {
       await waitIceGathering(pc, 1500);
       if (gen !== this.gen) return null;
 
-      const r = await signalFetch('/api/whep', {
+      const r = await signalFetch(`/api/whep?provider=${encodeURIComponent(this.provider)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp', 'X-Camera-Session': sid },
         body: pc.localDescription.sdp,
@@ -306,7 +311,7 @@ export class CameraPlayer {
     await waitIceGathering(pc);
     if (gen !== this.gen) return;
 
-    const r = await signalFetch('/api/whep', {
+    const r = await signalFetch(`/api/whep?provider=${encodeURIComponent(this.provider)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp', 'X-Camera-Session': sid },
       body: pc.localDescription.sdp,
