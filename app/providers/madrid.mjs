@@ -14,7 +14,7 @@ const HEADERS = {
   Accept: 'application/vnd.google-earth.kml+xml,text/xml,*/*',
 };
 
-const TTL_MS = 10 * 60 * 1000;
+const TTL_MS = 30 * 1000; // KML e pequeno e sem cache: 30 s mantem a versao fresca
 let cache = { at: 0, data: null };
 
 function dataValue(block, name) {
@@ -69,6 +69,12 @@ export default {
   defaultRadiusKm: 3,
   maxRadiusKm: 15,
 
+  // O CDN do Informo recusa requisicoes sem Referer do proprio site.
+  imageHeaders: {
+    Referer: 'https://informo.madrid.es/',
+    Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+  },
+
   async listCameras(force = false) {
     const fresh = cache.data && Date.now() - cache.at < TTL_MS;
     if (fresh && !force) return cache.data;
@@ -87,10 +93,13 @@ export default {
 
   async stream(camera) {
     if (!camera?.imageUrl) throw new Error('Camera sem imagem');
+
     return {
       kind: 'snapshot',
-      refreshMs: 120000, // as fotos mudam a cada poucos minutos
+      refreshMs: 25000, // a fonte troca a foto em intervalos de dezenas de segundos
       frames: 1,
+      // O servidor confere com um HEAD se a foto mudou antes de baixar de novo.
+      revalidate: true,
       url: camera.imageUrl,
     };
   },

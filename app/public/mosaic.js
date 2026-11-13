@@ -240,8 +240,11 @@ function makeTile(entry, startDelay = 0) {
     const km = haversineKm(cfg.center.lat, cfg.center.lon, +info.lat, +info.lon);
     bits.push(fmtKm(km));
   }
-  if (kind === 'snapshot') bits.push('foto');
-  metaEl.textContent = bits.join(' · ');
+
+  const setKind = (label) => {
+    metaEl.textContent = [...bits, label].join(' · ');
+  };
+  setKind(kind === 'snapshot' ? 'foto' : 'vídeo');
 
   if (kind === 'snapshot') muteBtn.hidden = true;
 
@@ -250,12 +253,14 @@ function makeTile(entry, startDelay = 0) {
     el,
     media: null,
     player: null,
+    hls: null,
     snapTimer: null,
     startTimer: null,
     attempt: 0,
     timer: null,
     gen: 0,
     baseHint: '',
+    setKind,
     setName(next) {
       const n = prettyName(next?.nome || apiId);
       nameEl.textContent = n;
@@ -268,6 +273,8 @@ function makeTile(entry, startDelay = 0) {
       clearTimeout(this.snapTimer);
       this.timer = null;
       this.snapTimer = null;
+      this.hls?.destroy();
+      this.hls = null;
       this.player?.stop(true);
       this.player = null;
       if (this.media) {
@@ -395,6 +402,60 @@ function makeTile(entry, startDelay = 0) {
     player.start();
   }
 
+  function startHls(stream, gen) {
+    const video = newVideo();
+    const url = stream.url;
+
+    video.addEventListener('error', () => {
+      if (!alive(gen)) return;
+      showError('Camera fora do ar', 'Nao foi possivel reproduzir a transmissao HLS.');
+      scheduleRetry();
+    });
+
+    if (window.Hls && window.Hls.isSupported()) {
+      const hls = new window.Hls({
+        enableWorker: true,
+        maxBufferLength: 12,
+        liveSyncDurationCount: 2,
+      });
+      tile.hls = hls;
+
+      hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {});
+      });
+
+      hls.on(window.Hls.Events.ERROR, (_ev, data) => {
+        if (!alive(gen) || !data?.fatal) return;
+
+        if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+          try {
+            hls.recoverMediaError();
+            return;
+          } catch {
+            /* cai no erro abaixo */
+          }
+        }
+
+        hls.destroy();
+        tile.hls = null;
+        showError('Camera fora do ar', 'A transmissao HLS falhou.');
+        scheduleRetry();
+      });
+
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      return;
+    }
+
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = url;
+      video.play().catch(() => {});
+      return;
+    }
+
+    showError('Codec nao suportado', 'Este navegador nao reproduz HLS.');
+  }
+
   function startSnapshot(stream, gen) {
     const img = document.createElement('img');
     img.alt = nome;
@@ -407,7 +468,10 @@ function makeTile(entry, startDelay = 0) {
 
     const load = () => {
       if (!alive(gen)) return;
-      img.src = String(stream.url).replace('{frame}', String(frame));
+      const base = String(stream.url).replace('{frame}', String(frame));
+      // O servidor guarda a imagem pelo tempo de refresh; o parametro evita
+      // que o navegador reaproveite a mesma foto do cache HTTP.
+      img.src = `${base}${base.includes('?') ? '&' : '?'}t=${Date.now()}`;
     };
 
     img.addEventListener('load', () => {
@@ -441,6 +505,8 @@ function makeTile(entry, startDelay = 0) {
     msgEl.hidden = true;
     dot.dataset.state = 'connecting';
 
+    tile.hls?.destroy();
+    tile.hls = null;
     tile.player?.stop(true);
     tile.player = null;
 
@@ -448,7 +514,20 @@ function makeTile(entry, startDelay = 0) {
       const stream = await getStream(providerId, apiId);
       if (!alive(gen)) return;
 
+      const kindLabel =
+        stream.kind === 'snapshot'
+          ? `foto${
+              Number(stream.refreshMs) >= 5000
+                ? ` · ${Math.round(Number(stream.refreshMs) / 1000)} s`
+                : ''
+            }`
+          : 'vídeo';
+
+      tile.setKind(kindLabel);
+      muteBtn.hidden = stream.kind === 'snapshot';
+
       if (stream.kind === 'snapshot') startSnapshot(stream, gen);
+      else if (stream.kind === 'hls') startHls(stream, gen);
       else startWhep(gen);
     } catch (err) {
       if (!alive(gen)) return;

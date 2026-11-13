@@ -46,7 +46,9 @@ Duplo clique em **`Mosaico Vistas (Homolog).vbs`**.
 
 - Seletor de cidade (Rio, São Paulo, Madrid, Los Angeles).
 - Camada `app/providers/`: cada cidade informa lista e modo de exibição.
-- Mosaico com tiles de vídeo (WHEP) **e** de foto (com atualização automática).
+- Mosaico com tiles de vídeo (WHEP e HLS) **e** de foto (com atualização automática).
+- Los Angeles: vídeo H.264 por câmera, com foto de reserva quando o stream cai.
+- Madrid: foto conferida a cada ~25 s; o servidor só baixa de novo quando muda.
 - Busca por endereço por país e atribuição visível da fonte.
 
 Como testar:
@@ -54,12 +56,15 @@ Como testar:
 1. Abra `http://127.0.0.1:8788/`.
 2. Troque a cidade no seletor e confira a lista e o raio.
 3. Selecione câmeras e abra o mosaico.
-4. Em São Paulo, a foto troca de quadro a cada ~1,5 s. Em Madrid e Los
-   Angeles, a foto é atualizada a cada poucos minutos.
+4. Em São Paulo, a foto troca de quadro a cada ~1,5 s. Em Madrid, o app confere
+   a foto a cada ~25 s e a troca quando a fonte publica uma nova. Em Los Angeles,
+   o tile mostra `vídeo` quando o stream está no ar e `foto` quando caiu (a foto
+   é conferida a cada 30 s).
 
 Observação: o vídeo do Rio depende de H.265 no navegador. No navegador
-interno do OpenCode o ICE pode não fechar (sem UDP); valide o vídeo no
-Chrome/Edge do Windows.
+interno do OpenCode o ICE pode não fechar (sem UDP); valide o vídeo do Rio no
+Chrome/Edge do Windows. O vídeo de Los Angeles é H.264 e funciona no navegador
+interno.
 
 ## Regra de ouro
 

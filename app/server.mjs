@@ -197,7 +197,56 @@ async function streamInfo(providerId, cameraId) {
     };
   }
 
+  // HLS de terceiros: a playlist e os segmentos passam pelo proxy local,
+  // que resolve o Referer exigido pela fonte e o CORS.
+  if (stream.kind === 'hls' && stream.proxy) {
+    return {
+      kind: 'hls',
+      url:
+        `/api/hls?provider=${encodeURIComponent(provider.id)}` +
+        `&id=${encodeURIComponent(cameraId)}` +
+        `&u=${encodeURIComponent(stream.url)}`,
+    };
+  }
+
   return { kind: stream.kind, url: stream.url || null };
+}
+
+const IMAGE_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36';
+
+/** Evita que o CDN da fonte devolva uma copia em cache. */
+function cacheBust(url) {
+  return `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+}
+
+/**
+ * Um HEAD no arquivo da foto diz se ela mudou, sem baixar a imagem.
+ * Em caso de erro de rede, mantem o quadro atual (true).
+ */
+async function unchanged(baseUrl, hit, provider) {
+  try {
+    const r = await fetch(cacheBust(baseUrl), {
+      method: 'HEAD',
+      headers: {
+        'User-Agent': IMAGE_UA,
+        Accept: 'image/jpeg,image/*;q=0.9,*/*;q=0.8',
+        ...(provider.imageHeaders || {}),
+      },
+      signal: AbortSignal.timeout(10000),
+      cache: 'no-store',
+    });
+    if (!r.ok) return false;
+
+    const etag = r.headers.get('etag');
+    const lastMod = r.headers.get('last-modified');
+    if (hit.etag && etag) return hit.etag === etag;
+    if (hit.lastModified && lastMod) return hit.lastModified === lastMod;
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 async function getSnapshot(providerId, cameraId, frame) {
@@ -215,26 +264,54 @@ async function getSnapshot(providerId, cameraId, frame) {
   const n = Math.max(1, Math.min(Number(frame) || 1, stream.frames || 1));
   const key = `${provider.id}:${camera.id}:${n}`;
   const hit = snapshotCache.get(key);
-  if (hit && Date.now() - hit.at < hit.ttl) return hit;
+  const baseUrl = stream.url.replace('{frame}', String(n));
 
-  const url = stream.url.replace('{frame}', String(n));
-  const r = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
-      Accept: 'image/jpeg,image/*;q=0.9,*/*;q=0.8',
-      ...(provider.imageHeaders || {}),
-    },
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!r.ok) throw new Error(`Imagem respondeu HTTP ${r.status}`);
+  if (hit) {
+    if (Date.now() - hit.at < hit.ttl) return { img: hit, source: 'hit' };
+
+    /*
+     * Fontes que publicam a foto em um arquivo fixo (Madrid, Caltrans) aceitam
+     * revalidacao: um HEAD barato diz se a imagem mudou. So baixamos os
+     * ~500 KB quando o ETag/Last-Modified realmente mudou.
+     */
+    if (stream.revalidate && (await unchanged(baseUrl, hit, provider))) {
+      hit.at = Date.now();
+      return { img: hit, source: 'revalidated' };
+    }
+  }
+
+  const url = stream.revalidate ? cacheBust(baseUrl) : baseUrl;
+  let r;
+  try {
+    r = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
+        Accept: 'image/jpeg,image/*;q=0.9,*/*;q=0.8',
+        ...(provider.imageHeaders || {}),
+      },
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    // Fonte instavel: mantem o ultimo quadro em vez de apagar o tile.
+    if (hit) return { img: hit, source: 'stale' };
+    throw err;
+  }
+
+  if (!r.ok) {
+    // 403/5xx intermitente (comum em Madrid): serve a foto anterior.
+    if (hit) return { img: hit, source: 'stale' };
+    throw new Error(`Imagem respondeu HTTP ${r.status}`);
+  }
 
   const entry = {
     at: Date.now(),
     type: r.headers.get('content-type') || 'image/jpeg',
     buf: Buffer.from(await r.arrayBuffer()),
     ttl: Math.max(1000, stream.refreshMs || 5000),
+    etag: r.headers.get('etag'),
+    lastModified: r.headers.get('last-modified'),
   };
 
   if (snapshotCache.size >= SNAPSHOT_MAX) {
@@ -249,7 +326,137 @@ async function getSnapshot(providerId, cameraId, frame) {
     if (oldestKey) snapshotCache.delete(oldestKey);
   }
   snapshotCache.set(key, entry);
-  return entry;
+  return { img: entry, source: 'miss' };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Proxy de HLS (playlists e segmentos de terceiros)                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Alguns orgaos (Caltrans) publicam HLS sem CORS e exigem Referer.
+ * O navegador nao consegue buscar direto, entao o servidor busca e
+ * reescreve a playlist para que os segmentos tambem passem por aqui.
+ */
+
+const HLS_MAX_BYTES = 32 * 1024 * 1024;
+
+const HLS_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36';
+
+function hlsLocalUrl(providerId, cameraId, upstream) {
+  return (
+    `/api/hls?provider=${encodeURIComponent(providerId)}` +
+    `&id=${encodeURIComponent(cameraId)}` +
+    `&u=${encodeURIComponent(upstream)}`
+  );
+}
+
+/** Troca cada URL da playlist (relativa ou absoluta) pela rota local. */
+function rewritePlaylist(text, baseUrl, providerId, cameraId) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const t = line.trim();
+      if (!t) return line;
+
+      if (t.startsWith('#')) {
+        return t.replace(/URI="([^"]+)"/g, (match, uri) => {
+          if (uri.startsWith('data:')) return match;
+          try {
+            return `URI="${hlsLocalUrl(providerId, cameraId, new URL(uri, baseUrl).href)}"`;
+          } catch {
+            return match;
+          }
+        });
+      }
+
+      try {
+        return hlsLocalUrl(providerId, cameraId, new URL(t, baseUrl).href);
+      } catch {
+        return line;
+      }
+    })
+    .join('\n');
+}
+
+async function getHls(providerId, cameraId, upstream) {
+  const provider = requireProvider(providerId);
+  const hosts = provider.hlsHosts || [];
+
+  if (!hosts.length) {
+    const err = new Error('Esta cidade nao usa video HLS');
+    err.status = 400;
+    throw err;
+  }
+
+  const camera = await findCamera(providerId, cameraId);
+  if (!camera) {
+    const err = new Error('Camera nao encontrada nesta cidade');
+    err.status = 404;
+    throw err;
+  }
+
+  let target = upstream;
+  if (!target) {
+    const stream = await provider.stream(camera);
+    if (stream.kind !== 'hls') {
+      const err = new Error('Esta camera nao esta transmitindo video');
+      err.status = 409;
+      throw err;
+    }
+    target = stream.url;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(target);
+  } catch {
+    const err = new Error('URL de video invalida');
+    err.status = 400;
+    throw err;
+  }
+
+  // So os hosts declarados pelo provider: evita virar proxy aberto.
+  if (parsed.protocol !== 'https:' || !hosts.includes(parsed.hostname)) {
+    const err = new Error('Host de video nao permitido');
+    err.status = 403;
+    throw err;
+  }
+
+  const r = await fetch(parsed.href, {
+    headers: {
+      'User-Agent': HLS_UA,
+      Accept: '*/*',
+      ...(provider.hlsReferer ? { Referer: provider.hlsReferer } : {}),
+    },
+    signal: AbortSignal.timeout(20000),
+    cache: 'no-store',
+  });
+
+  if (!r.ok) {
+    const err = new Error(`Video respondeu HTTP ${r.status}`);
+    err.status = 502;
+    throw err;
+  }
+
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > HLS_MAX_BYTES) {
+    const err = new Error('Trecho de video grande demais');
+    err.status = 502;
+    throw err;
+  }
+
+  const type = r.headers.get('content-type') || 'application/octet-stream';
+  const isPlaylist = /mpegurl/i.test(type) || buf.subarray(0, 7).toString() === '#EXTM3U';
+  if (!isPlaylist) return { type, buf, playlist: false };
+
+  return {
+    type: 'application/vnd.apple.mpegurl',
+    buf: Buffer.from(rewritePlaylist(buf.toString('utf8'), parsed.href, provider.id, cameraId), 'utf8'),
+    playlist: true,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -621,13 +828,32 @@ const server = http.createServer(async (req, res) => {
       const frame = url.searchParams.get('frame') || '1';
       if (!id) return sendJSON(res, 400, { error: 'id ausente' });
 
-      const img = await getSnapshot(providerId, id, frame);
+      const { img, source } = await getSnapshot(providerId, id, frame);
       res.writeHead(200, {
         'Content-Type': img.type,
         'Content-Length': img.buf.length,
         'Cache-Control': `public, max-age=${Math.round(img.ttl / 1000)}`,
+        // diagnostico: hit | revalidated | stale | miss
+        'X-Snapshot': source,
       });
       return res.end(img.buf);
+    }
+
+    /* ---- proxy de video HLS ---- */
+    if (req.method === 'GET' && p === '/api/hls') {
+      const providerId = url.searchParams.get('provider') || DEFAULT_PROVIDER;
+      const id = (url.searchParams.get('id') || '').trim();
+      const upstream = url.searchParams.get('u') || '';
+      if (!id) return sendJSON(res, 400, { error: 'id ausente' });
+
+      const out = await getHls(providerId, id, upstream);
+      res.writeHead(200, {
+        'Content-Type': out.type,
+        'Content-Length': out.buf.length,
+        // Playlist muda a cada segmento; segmento publicado nao muda.
+        'Cache-Control': out.playlist ? 'no-store' : 'public, max-age=60',
+      });
+      return res.end(out.buf);
     }
 
     /* ---- geocodificacao ---- */

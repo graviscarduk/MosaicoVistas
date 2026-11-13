@@ -5,8 +5,9 @@
 [![Plataforma](https://img.shields.io/badge/plataforma-Windows%2010%2F11-0078D6)](#requisitos)
 
 Aplicativo **portátil** para Windows que exibe câmeras de ruas em um mosaico, com
-seleção por mapa. Reúne câmeras de trânsito públicas de várias cidades; o Rio de
-Janeiro tem vídeo ao vivo e as demais fontes publicam fotos atualizadas.
+seleção por mapa. Reúne câmeras de trânsito públicas de várias cidades: o Rio de
+Janeiro transmite em vídeo (WebRTC/H.265) e Los Angeles em vídeo HLS (H.264) nas
+câmeras em que o stream está no ar; São Paulo e Madrid publicam fotos atualizadas.
 
 Nada é instalado no computador: o app sobe um servidor local usando o runtime
 Node.js incluído no pacote e abre a interface no seu navegador. Não abre portas
@@ -31,12 +32,13 @@ Para encerrar manualmente, use **`Parar Mosaico.vbs`**.
 | Cidade | Fonte | Modo |
 |---|---|---|
 | Rio de Janeiro | COR-Rio | **vídeo ao vivo** (WebRTC/WHEP, H.265) |
+| Los Angeles | Caltrans (distrito 7) | **vídeo** HLS (H.264) quando disponível; foto a cada ~30 s como reserva |
 | São Paulo | CET | fotos (sequência de ~1,1 s) |
-| Madrid | Informo / Ayuntamiento | fotos (atualização ~2 min) |
-| Los Angeles | Caltrans (distrito 7) | fotos (atualização ~2 min) |
+| Madrid | Informo / Ayuntamiento | fotos (confere a cada ~25 s; a fonte publica em dezenas de segundos a minutos) |
 
-A prioridade do projeto é **vídeo**. Entre as fontes públicas verificadas, só o
-Rio de Janeiro publica vídeo acessível sem cadastro; as demais publicam fotos.
+A prioridade do projeto é **vídeo**. Rio e Los Angeles têm vídeo acessível sem
+cadastro; em Los Angeles o stream de cada câmera entra e sai do ar, então a
+mesma cidade mistura vídeo e foto. São Paulo e Madrid só publicam fotos.
 Cidades como Curitiba, Porto Alegre, Fortaleza, Santos, Barcelona, Lisboa,
 Buenos Aires e Santiago não mantêm um feed público de câmeras de trânsito.
 
@@ -51,13 +53,15 @@ comercialmente.
 
 ### Se o vídeo não aparecer
 
-O vídeo ao vivo (Rio de Janeiro) usa **H.265 (HEVC)**. Para visualizar:
+O Rio de Janeiro usa **H.265 (HEVC)**. Para visualizar:
 
 - Use Chrome ou Edge no Windows.
 - Instale a extensão **HEVC** da Microsoft Store (aprox. US$ 1).
 - Feche e reabra o navegador após instalar.
 
-Firefox e Chrome no Linux não decodificam H.265 e não exibirão o vídeo.
+Los Angeles usa H.264 e funciona nos navegadores comuns, sem extensão.
+
+Firefox e Chrome no Linux não decodificam H.265 e não exibirão o vídeo do Rio.
 
 ## Estrutura do repositório
 
@@ -93,16 +97,28 @@ Cada cidade é um módulo em `app/providers/` com a interface:
 
 ```js
 {
-  id, label, attribution, creditUrl, kind,   // 'whep' ou 'snapshot'
+  id, label, attribution, creditUrl,
+  kind,             // 'whep', 'hls' ou 'snapshot'
+  mediaLabel,       // texto no seletor (ex.: 'vídeo (foto se fora do ar)')
   defaultCenter, defaultZoom, defaultRadiusKm, maxRadiusKm,
-  listCameras(),   // [{ id, nome, lat, lon }]
-  stream(camera)   // { kind: 'whep' } ou { kind: 'snapshot', url, refreshMs, frames }
+  imageHeaders,     // opcional: Referer exigido pela fonte de fotos
+  hlsHosts,         // opcional: hosts permitidos no proxy de HLS
+  hlsReferer,       // opcional: Referer exigido pela fonte de vídeo
+  listCameras(),    // [{ id, nome, lat, lon }]
+  stream(camera)    // { kind, url, refreshMs?, frames?, proxy?, revalidate? }
 }
 ```
 
 Registre o módulo em `app/providers/index.mjs`. O servidor expõe
-`/api/providers`, `/api/cameras?provider=`, `/api/stream?provider=&id=` e
-`/api/snapshot?provider=&id=&frame=`; a interface se adapta ao `kind`.
+`/api/providers`, `/api/cameras?provider=`, `/api/stream?provider=&id=`,
+`/api/snapshot?provider=&id=&frame=` e `/api/hls?provider=&id=&u=`; a interface
+se adapta ao `kind` de cada câmera. O proxy de HLS reescreve a playlist para que
+playlist e segmentos passem pelo servidor local (resolve CORS e `Referer`).
+Com `revalidate: true` no `stream()`, o servidor confere com um `HEAD` se a foto
+mudou antes de baixá-la de novo (usa `ETag`/`Last-Modified`).
+
+`app/public/vendor/hls.min.js` é o [hls.js](https://github.com/video-dev/hls.js)
+(Apache-2.0), usado apenas para o vídeo HLS de Los Angeles.
 
 ### Gerar o pacote localmente
 

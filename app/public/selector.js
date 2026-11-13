@@ -2,6 +2,7 @@ import {
   getConfig,
   getCameras,
   getProviders,
+  getStream,
   putConfig,
   padId,
   prettyName,
@@ -85,7 +86,7 @@ function populateProviderSelect() {
   for (const p of providers) {
     const opt = document.createElement('option');
     opt.value = p.id;
-    opt.textContent = `${p.label} — ${p.kind === 'whep' ? 'vídeo' : 'foto'}`;
+    opt.textContent = `${p.label} — ${p.mediaLabel || (p.kind === 'whep' ? 'vídeo' : 'foto')}`;
     select.appendChild(opt);
   }
   select.value = providerId;
@@ -460,7 +461,8 @@ function renderList() {
   for (const { g, d } of rows) {
     const apiId = g.rep.apiId;
     const isSel = selected.has(apiId);
-    const st = status[statusKey(apiId)]?.state;
+    const entry = status[statusKey(apiId)];
+    const st = entry?.state;
 
     const row = document.createElement('div');
     row.className = 'group' + (isSel ? ' selected' : '');
@@ -492,7 +494,7 @@ function renderList() {
     const badges = document.createElement('div');
     badges.style.cssText = 'display:flex;gap:4px;align-items:center';
 
-    if (st === 'live') badges.appendChild(badge(providerMeta?.kind === 'snapshot' ? 'ok' : 'ao vivo', 'live'));
+    if (st === 'live') badges.appendChild(badge(entry?.kind === 'snapshot' ? 'ok' : 'ao vivo', 'live'));
     else if (st === 'offline') badges.appendChild(badge('fora', 'offline'));
     else if (st === 'codec') badges.appendChild(badge('H.265', 'codec'));
 
@@ -649,7 +651,14 @@ el('locate').addEventListener('click', () => {
 /* ------------------------------------------------------------------ */
 
 async function probe(apiId, timeout = 12000) {
-  const kind = providerMeta?.kind || 'whep';
+  let info;
+  try {
+    info = await getStream(providerId, apiId);
+  } catch {
+    return { state: 'offline', kind: null };
+  }
+
+  const kind = info?.kind || 'whep';
 
   // Foto: basta a imagem responder.
   if (kind === 'snapshot') {
@@ -663,9 +672,25 @@ async function probe(apiId, timeout = 12000) {
         t: String(Date.now()),
       });
       const r = await fetch('/api/snapshot?' + qs, { signal: ctrl.signal, cache: 'no-store' });
-      return r.ok ? 'live' : 'offline';
+      return { state: r.ok ? 'live' : 'offline', kind };
     } catch {
-      return 'offline';
+      return { state: 'offline', kind };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // HLS: a playlist responde e e mesmo uma playlist?
+  if (kind === 'hls') {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      const r = await fetch(info.url, { signal: ctrl.signal, cache: 'no-store' });
+      if (!r.ok) return { state: 'offline', kind };
+      const text = await r.text();
+      return { state: text.includes('#EXTM3U') ? 'live' : 'offline', kind };
+    } catch {
+      return { state: 'offline', kind };
     } finally {
       clearTimeout(timer);
     }
@@ -694,13 +719,13 @@ async function probe(apiId, timeout = 12000) {
 
     const timer = setTimeout(() => finish('offline'), timeout);
 
-    function finish(result) {
+    function finish(state) {
       if (done) return;
       done = true;
       clearTimeout(timer);
       player.stop(true);
       video.remove();
-      resolve(result);
+      resolve({ state, kind: 'whep' });
     }
 
     player.start();
@@ -727,7 +752,7 @@ async function runTests(ids) {
     while (index < ids.length && !cancelTest) {
       const id = ids[index++];
       const result = await probe(id);
-      status[statusKey(id)] = { state: result, at: Date.now() };
+      status[statusKey(id)] = { state: result.state, kind: result.kind, at: Date.now() };
       writeStatus(status);
       done += 1;
       setProgress(done, ids.length);
