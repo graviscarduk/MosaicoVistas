@@ -84,12 +84,12 @@ function normalize(html) {
 
 export default {
   id: 'cet-sp',
-  label: 'São Paulo',
+  label: 'São Paulo (CET)',
   attribution: 'Imagens: CET — Companhia de Engenharia de Tráfego de São Paulo',
   creditUrl: 'https://cameras.cetsp.com.br/View/Cam.aspx',
   kind: 'snapshot',
   countryCode: 'br',
-  defaultCenter: { lat: -23.5705, lon: -46.6705, label: 'São Paulo' },
+  defaultCenter: { lat: -23.5705, lon: -46.6705, label: 'São Paulo (zona oeste)' },
   defaultZoom: 13,
   defaultRadiusKm: 6,
   maxRadiusKm: 20,

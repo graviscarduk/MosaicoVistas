@@ -86,7 +86,7 @@ function populateProviderSelect() {
   for (const p of providers) {
     const opt = document.createElement('option');
     opt.value = p.id;
-    opt.textContent = `${p.label} — ${p.mediaLabel || (p.kind === 'whep' ? 'vídeo' : 'foto')}`;
+    opt.textContent = p.label;
     select.appendChild(opt);
   }
   select.value = providerId;

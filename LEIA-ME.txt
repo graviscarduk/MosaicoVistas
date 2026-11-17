@@ -14,10 +14,10 @@ COMO USAR
 
 CIDADES
 -------
-Rio de Janeiro  video ao vivo, H.265
-Los Angeles     video HLS, H.264, com foto de reserva
-Sao Paulo       fotos
-Madrid          fotos
+Rio de Janeiro  video ao vivo (COR, H.265)
+Los Angeles     video HLS (H.264) com foto de reserva
+Sao Paulo       fotos (CET)
+Madrid          fotos (Informo)
 
 
 SE O VIDEO NAO APARECER

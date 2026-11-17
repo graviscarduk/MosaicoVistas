@@ -99,7 +99,6 @@ Cada cidade é um módulo em `app/providers/` com a interface:
 {
   id, label, attribution, creditUrl,
   kind,             // 'whep', 'hls' ou 'snapshot'
-  mediaLabel,       // texto no seletor (ex.: 'vídeo (foto se fora do ar)')
   defaultCenter, defaultZoom, defaultRadiusKm, maxRadiusKm,
   imageHeaders,     // opcional: Referer exigido pela fonte de fotos
   hlsHosts,         // opcional: hosts permitidos no proxy de HLS

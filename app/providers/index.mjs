@@ -22,7 +22,6 @@ export function publicProviders() {
     attribution: p.attribution,
     creditUrl: p.creditUrl || null,
     kind: p.kind,
-    mediaLabel: p.mediaLabel || null,
     countryCode: p.countryCode || 'br',
     defaultCenter: p.defaultCenter,
     defaultZoom: p.defaultZoom || 14,

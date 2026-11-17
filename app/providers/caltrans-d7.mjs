@@ -86,11 +86,10 @@ function normalize(raw) {
 
 export default {
   id: 'caltrans-d7',
-  label: 'Los Angeles',
+  label: 'Los Angeles (Caltrans)',
   attribution: 'Imagens: California Department of Transportation (Caltrans)',
   creditUrl: 'https://cwwp2.dot.ca.gov/vm/streamlist.htm',
   kind: 'hls',
-  mediaLabel: 'vídeo, foto se fora do ar',
   countryCode: 'us',
   defaultCenter: { lat: 34.0522, lon: -118.2437, label: 'Los Angeles, Califórnia' },
   defaultZoom: 10,
