@@ -59,7 +59,7 @@ function normalize(kml) {
 
 export default {
   id: 'madrid',
-  label: 'Madrid (Informo)',
+  label: 'Madrid',
   attribution: 'Imagens: Ayuntamiento de Madrid — Informo',
   creditUrl: 'https://informo.madrid.es/',
   kind: 'snapshot',

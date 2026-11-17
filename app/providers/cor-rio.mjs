@@ -72,7 +72,7 @@ function normalize(list) {
 
 export default {
   id: 'cor-rio',
-  label: 'Rio de Janeiro (COR)',
+  label: 'Rio de Janeiro',
   attribution: 'Câmeras: COR-Rio',
   creditUrl: 'https://cor.rio/',
   kind: 'whep',
