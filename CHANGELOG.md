@@ -34,6 +34,9 @@ projeto usa [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   por `ETag` antes de baixar.
 - `config.json` guarda a cidade escolhida (`provider`); configurações antigas
   continuam funcionando e assumem o Rio de Janeiro.
+- Mosaico com visual renovado: tiles arredondados e espaçados, barra superior
+  translúcida, escolha de layout em destaque e estados vazio/erro mais discretos
+  (o texto do tile vazio aparece ao passar o mouse).
 
 ### Observado
 

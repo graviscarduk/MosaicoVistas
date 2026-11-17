@@ -103,7 +103,9 @@ function applyLayoutUI() {
 
   for (const btn of document.querySelectorAll('[data-layout]')) {
     const [c, r] = btn.dataset.layout.split('x').map(Number);
-    btn.classList.toggle('primary', c === cols && r === rows);
+    const active = c === cols && r === rows;
+    btn.classList.toggle('primary', active);
+    btn.setAttribute('aria-pressed', String(active));
   }
 }
 
@@ -189,6 +191,7 @@ function applyChildren(next) {
 function makeEmptyTile() {
   const el = document.createElement('div');
   el.className = 'tile is-empty';
+  el.title = 'Escolher câmeras';
   el.innerHTML = `
     <div class="tile-msg">
       <div class="empty-plus">+</div>
